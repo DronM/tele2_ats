@@ -158,15 +158,15 @@ func (t *Tele2Ats) RefreshTokens() error {
 func (t *Tele2Ats) AddAuthTokenToRequest(req *http.Request) error {
 	if t.AccessToken == "" || (t.TokenDate.Add(t.AccessTokenDuration).Before(time.Now())) {
 		//no token or expired
-fmt.Println("no token or expired - refreshing AccessToken=", t.AccessToken)		
+//fmt.Println("no token or expired - refreshing AccessToken=", t.AccessToken)		
 		if t.RefreshToken == "" || (t.TokenDate.Add(t.RefreshTokenDuration).Before(time.Now())) {
-fmt.Println("no token or expired - refreshing RefreshToken=", t.RefreshToken)				
+//fmt.Println("no token or expired - refreshing RefreshToken=", t.RefreshToken)				
 			return errors.New(ERR_REFRESH_TOKEN_EXPIRED)
 		} 
 		if err := t.RefreshTokens(); err != nil {
 			return err
 		}	
-fmt.Println("Tokens are refreshed successfully")
+//fmt.Println("Tokens are refreshed successfully")
 	}
 	req.Header.Set("Authorization", t.AccessToken)
 	return nil
