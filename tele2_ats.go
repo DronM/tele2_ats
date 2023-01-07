@@ -37,6 +37,13 @@ type Tele2Ats struct {
 	TokenDate time.Time `json:"tokenDate"`
 }
 
+type HTTPError struct {
+	Timestamp int64 `json:"timestamp"`
+	Status int `json:"status"`
+	Error string `json:"error"`
+	Path string `json:"path"`
+}
+
 //Структура сотрудников
 type Employee struct {
 	EmployeeId int `json:"employeeId"`
@@ -139,6 +146,9 @@ func (t *Tele2Ats) RefreshTokens() error {
 	if err != nil {
 		return err
 	}
+	if resp.StatusCode != 200 {
+		return errors.New(fmt.Sprintf("RefreshTokens HTTP error: %d", resp.StatusCode))
+	}
 	token_time := time.Now().Add(time.Minute * time.Duration(10) * -1) //10 minutes less
 	auth_data := struct {
 		AccessToken string `json:"accessToken,"`
@@ -150,6 +160,7 @@ func (t *Tele2Ats) RefreshTokens() error {
 	t.AccessToken = auth_data.AccessToken
 	t.RefreshToken = auth_data.RefreshToken
 	t.TokenDate = token_time
+//fmt.Println("Tokens are refreshed, AccessToken=",t.AccessToken,"RefreshToken=",t.RefreshToken)	
 	return nil
 }
 
@@ -158,15 +169,13 @@ func (t *Tele2Ats) RefreshTokens() error {
 func (t *Tele2Ats) AddAuthTokenToRequest(req *http.Request) error {
 	if t.AccessToken == "" || (t.TokenDate.Add(t.AccessTokenDuration).Before(time.Now())) {
 		//no token or expired
-//fmt.Println("no token or expired - refreshing AccessToken=", t.AccessToken)		
+//fmt.Println("AccessToken expired")		
 		if t.RefreshToken == "" || (t.TokenDate.Add(t.RefreshTokenDuration).Before(time.Now())) {
-//fmt.Println("no token or expired - refreshing RefreshToken=", t.RefreshToken)				
 			return errors.New(ERR_REFRESH_TOKEN_EXPIRED)
 		} 
 		if err := t.RefreshTokens(); err != nil {
 			return err
 		}	
-//fmt.Println("Tokens are refreshed successfully")
 	}
 	req.Header.Set("Authorization", t.AccessToken)
 	return nil
@@ -315,64 +324,70 @@ func (t *Tele2Ats) WaitForNewCalls(pause time.Duration) <-chan *ActiveCalls {
 						old_token_date = t.TokenDate
 					}
 					client := &http.Client{}		
-					resp, c.Error = client.Do(req)	
-					if c.Error == nil {			
+					resp, c.Error = client.Do(req)					
+					if c.Error == nil {
 						body, c.Error = ioutil.ReadAll(resp.Body)
-						if c.Error == nil && len(body)>0 {
+						if c.Error == nil && len(body)>0 {						
 							cur_crc := crc32.Checksum(body, crc32.IEEETable)
 							if cur_crc != old_crc {
-								var new_calls []ActiveCallInf
-								err := json.Unmarshal(body, &new_calls)
-								if err == nil {
-									/*if len(new_calls) > 0 {
-										fmt.Println("=== Got new calls with new CRC32", string(body))
-									}*/
-									for new_call_ind, new_call :=  range new_calls {
-										new_call_crc := crc32.Checksum([]byte(new_call.CallType+new_call.CallerNumberFull+new_call.CalledNumberFull), crc32.IEEETable)
-										new_calls[new_call_ind].Crc = new_call_crc
-										if _, ok := old_calls[new_call_crc]; !ok {
-											//call start
-											if c.Calls == nil {
-												c.Calls = make([]ActiveCall,0)
-											}
-											old_calls[new_call_crc] = ActiveCall{CallInf: CallInf{CallType: new_call.CallType,
-													CalledNumberFull: new_call.CalledNumberFull,
-													CalledNumberShort: new_call.CalledNumberShort,
-													CallerNumberFull: new_call.CallerNumberFull,
-													CallerNumberShort: new_call.CallerNumberShort,
-												},
-												CallAction: CALL_ATS_START,
-											}										
-											c.Calls = append(c.Calls, old_calls[new_call_crc])
-										}
-									}								
-									for old_call_crc, old_call :=  range old_calls {
-										crc_exists := false
-										for _,new_call := range new_calls {
-											if new_call.Crc == old_call_crc {
-												crc_exists = true
-												break
-											}
-										}
-										if !crc_exists {
-											//old call has ended
-											if c.Calls == nil {
-												c.Calls = make([]ActiveCall, 0)
-											}
-											c.Calls = append(c.Calls, ActiveCall{CallInf: CallInf{CallType: old_call.CallType,
-													CalledNumberFull: old_call.CalledNumberFull,
-													CalledNumberShort: old_call.CalledNumberShort,
-													CallerNumberFull: old_call.CallerNumberFull,
-													CallerNumberShort: old_call.CallerNumberShort,
-												},
-												CallAction: CALL_ATS_END,
-											})
-											delete(old_calls, old_call_crc)
-										}
-									}
+								if err := checkForError(resp, body); err != nil {
+									//http error
+									c.Error	= err
+									
 								}else{
-									//Unmarshal error
-									c.Error	= errors.New(fmt.Sprintf("json.Unmarshal error:%v on data:%s", err, string(body)))
+									var new_calls []ActiveCallInf
+									err := json.Unmarshal(body, &new_calls)
+									if err == nil {
+										/*if len(new_calls) > 0 {
+											fmt.Println("=== Got new calls with new CRC32", string(body))
+										}*/
+										for new_call_ind, new_call :=  range new_calls {
+											new_call_crc := crc32.Checksum([]byte(new_call.CallType+new_call.CallerNumberFull+new_call.CalledNumberFull), crc32.IEEETable)
+											new_calls[new_call_ind].Crc = new_call_crc
+											if _, ok := old_calls[new_call_crc]; !ok {
+												//call start
+												if c.Calls == nil {
+													c.Calls = make([]ActiveCall,0)
+												}
+												old_calls[new_call_crc] = ActiveCall{CallInf: CallInf{CallType: new_call.CallType,
+														CalledNumberFull: new_call.CalledNumberFull,
+														CalledNumberShort: new_call.CalledNumberShort,
+														CallerNumberFull: new_call.CallerNumberFull,
+														CallerNumberShort: new_call.CallerNumberShort,
+													},
+													CallAction: CALL_ATS_START,
+												}										
+												c.Calls = append(c.Calls, old_calls[new_call_crc])
+											}
+										}								
+										for old_call_crc, old_call :=  range old_calls {
+											crc_exists := false
+											for _,new_call := range new_calls {
+												if new_call.Crc == old_call_crc {
+													crc_exists = true
+													break
+												}
+											}
+											if !crc_exists {
+												//old call has ended
+												if c.Calls == nil {
+													c.Calls = make([]ActiveCall, 0)
+												}
+												c.Calls = append(c.Calls, ActiveCall{CallInf: CallInf{CallType: old_call.CallType,
+														CalledNumberFull: old_call.CalledNumberFull,
+														CalledNumberShort: old_call.CalledNumberShort,
+														CallerNumberFull: old_call.CallerNumberFull,
+														CallerNumberShort: old_call.CallerNumberShort,
+													},
+													CallAction: CALL_ATS_END,
+												})
+												delete(old_calls, old_call_crc)
+											}
+										}
+									}else{
+										//Unmarshal error
+										c.Error	= errors.New(fmt.Sprintf("json.Unmarshal error:%v on data:%s", err, string(body)))
+									}
 								}
 								old_crc = cur_crc
 							}
@@ -380,7 +395,7 @@ func (t *Tele2Ats) WaitForNewCalls(pause time.Duration) <-chan *ActiveCalls {
 						resp.Body.Close()
 					}
 				}
-				if c.Error != nil || c.Calls != nil {
+				if c.Error != nil || c.Calls != nil || c.AccessToken != "" {
 					act_calls <- &c
 				}
 				time.Sleep(pause)
@@ -423,15 +438,10 @@ func (t *Tele2Ats) GetActiveCalls() ([]CallInf, error) {
 
 func checkForError(resp *http.Response, body []byte) error{
 	if resp.StatusCode != 200 {
-		err_fields := struct {
-			Timestamp int64 `json:"timestamp"`
-			Status int `json:"status"`
-			Error string `json:"error"`
-			Path string `json:"path"`
-		}{}
+		err_fields := HTTPError{}
 	
 		if err := json.Unmarshal(body, &err_fields); err != nil {
-			return err
+			return errors.New(fmt.Sprintf("%v, body:%s", err, string(body)))
 		}
 		return errors.New(fmt.Sprintf("HTTP error: %d, text: %s, path: %s", err_fields.Status, err_fields.Error, err_fields.Path))
 	}

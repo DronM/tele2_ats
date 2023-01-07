@@ -1,3 +1,3 @@
-module tele2_ats
+module github.com/dronm/tele2_ats
 
-go 1.15
+go 1.19
